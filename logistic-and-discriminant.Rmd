@@ -1,0 +1,156 @@
+---
+title: "Fitting logistic and discriminant analysis models on shopping data"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+author: "Jarod Barnhart"
+date: "5/30/2022"
+output:
+  html_document: default
+---
+```{r, include=F}
+library(dplyr)
+library(tidyverse)
+library(MASS)
+library(PRROC)
+library(ROSE)
+```
+
+```{r, include=F}
+shopping_data<-read.csv('data/online_shoppers_intention.csv')
+```
+This project is based around data collected from online shoppers. Our target
+variable is Revenue, which is a binary variable determining whether or not a
+shopper made a purchase. We will be fitting 3 different models, a logistic
+regression, a linear discriminant analysis and a quadratic discriminant 
+analysis.
+
+After reading in the data, we turn our categorical variables into factors and
+merge rare categories into a single feature.
+```{r, include=F}
+# Turn our categorical variables into factors
+shopping_data$Month <-factor(shopping_data$Month)
+shopping_data$OperatingSystems<-as.factor(shopping_data$OperatingSystems)
+shopping_data$Browser<-as.factor(shopping_data$Browser)
+shopping_data$Region<-as.factor(shopping_data$Region)
+shopping_data$TrafficType<-as.factor(shopping_data$TrafficType)
+shopping_data$VisitorType<-as.factor(shopping_data$VisitorType)
+shopping_data$Weekend<-as.factor(shopping_data$Weekend)
+shopping_data$Revenue<-as.factor(shopping_data$Revenue)
+```
+
+```{r, include=F}
+# Merge rare categories into a single feature
+low_obs_Month <- shopping_data %>%
+  group_by(Month) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n()) 
+
+low_obs_OS <- shopping_data %>%
+  group_by(OperatingSystems) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n()) 
+
+low_obs_Browser <- shopping_data %>%
+  group_by(Browser) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n()) 
+
+low_obs_Region <- shopping_data %>%
+  group_by(Region) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n())
+
+low_obs_Traffic <- shopping_data %>%
+  group_by(TrafficType) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n())
+
+low_obs_Visitor <- shopping_data %>%
+  group_by(VisitorType) %>%
+  filter(n()<= 40) %>%
+  summarise(Count = n())
+
+levels(shopping_data$OperatingSystems)[c(5, 6,7)] <- 'Other'
+levels(shopping_data$Browser)[c(9, 11, 12)] <- 'Other'
+levels(shopping_data$TrafficType)[c(7,12,14,15,16,17,18,19)] <- 'Other'
+
+shopping_data$OperatingSystems<-as.factor(shopping_data$OperatingSystems)
+shopping_data$Browser<-as.factor(shopping_data$Browser)
+shopping_data$TrafficType<-as.factor(shopping_data$TrafficType)
+```
+Then we split our data into training and testing
+
+```{r}
+#Split data into training and testing
+smp_size <- floor(0.80*nrow(shopping_data))
+set.seed(1337)
+shopping_ind<-sample(seq_len(nrow(shopping_data)), size = smp_size)
+shopping_train <- shopping_data[shopping_ind, ]
+shopping_test <- shopping_data[-shopping_ind,]
+```
+One problem with this data set is that the number of shoppers who make a purchase
+is significantly smaller than the number of shoppers who dont make a purchase. 
+Because of this, we need to oversample the minority class and make a new dataset.
+
+```{r}
+shopping_class_F = shopping_train[shopping_train$Revenue=='FALSE',]
+shopping_class_T = shopping_train[shopping_train$Revenue=='TRUE',]
+oversample_inds = sample(1:nrow(shopping_class_T), nrow(shopping_class_F),
+                         replace=TRUE)
+shopping_class_T_oversamp = shopping_class_T[oversample_inds,]
+```
+
+And now we merge the original and oversampled data.
+```{r}
+# combine original and oversampled data into new dataframe
+shopping_oversamp = rbind(shopping_class_F, shopping_class_T_oversamp)
+```
+
+### Logistic Regression Model
+```{r}
+shopping_logit <- glm(Revenue~., data=shopping_oversamp, family="binomial")
+```
+
+### LDA Model
+```{r}
+shopping_lda <- lda(Revenue~., data=shopping_oversamp)
+```
+
+### QDA Model
+```{r}
+shopping_qda <- qda(Revenue~., data=shopping_oversamp) 
+```
+
+After the models are made, we need to produce some ROC curves for each model.
+First is our logistic ROC curve
+```{r}
+shopping_logit_pred<-predict(shopping_logit,type='response', newdata = shopping_test)
+shopping_logit_pred[shopping_logit_pred>0.5]<-'TRUE'
+shopping_logit_pred[shopping_logit_pred<0.5]<-'FALSE'
+shopping_logit_pred<-as.factor(shopping_logit_pred)
+
+roc.curve(response=shopping_test$Revenue, predicted=shopping_logit_pred)
+```
+Our ROC curve returns an AUC of 0.794, which is a pretty good model already.
+
+Next is the LDA ROC curve
+```{r}
+shopping_lda_pred<-predict(shopping_lda, newdata = shopping_test)$class
+
+roc.curve(response=shopping_test$Revenue, predicted=shopping_lda_pred)
+```
+The linear discriminant analysis model actually performed worse on validation
+data than the logistic model did.
+
+Last, the QDA ROC curve
+```{r}
+shopping_qda_pred<-predict(shopping_qda, newdata = shopping_test)$class
+
+roc.curve(response=shopping_test$Revenue, predicted=shopping_qda_pred)
+```
+The QDA model actually performed the worst on validation data, which could clue 
+us into the idea that making a model more complicated doesn't neccessarily make
+it better.
